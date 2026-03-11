@@ -70,7 +70,7 @@ const savePinCheck     = document.getElementById('save-pin');
 
 const noTicketsNotice  = document.getElementById('no-tickets-notice');
 
-let pendingSfx = null;
+let pendingMeme = null;
 let pendingBtn = null;
 let payMode    = 'tickets'; // 'tickets' | 'digi'
 
@@ -86,7 +86,7 @@ optTickets?.addEventListener('click', () => { if (!optTickets.disabled) setPayMo
 optDigi?.addEventListener('click',    () => setPayMode('digi'));
 
 async function openPayModal(file, btn) {
-  pendingSfx = file;
+  pendingMeme = file;
   pendingBtn = btn;
   payModalSound.textContent = formatLabel(file);
   payError.style.display    = 'none';
@@ -111,7 +111,7 @@ async function openPayModal(file, btn) {
 function closePayModal() {
   payModal.style.display = 'none';
   if (pendingBtn) { pendingBtn.classList.remove('playing'); pendingBtn = null; }
-  pendingSfx = null;
+  pendingMeme = null;
 }
 
 payCancel?.addEventListener('click', closePayModal);
@@ -130,7 +130,7 @@ payConfirm?.addEventListener('click', async () => {
 
   let body;
   if (payMode === 'tickets') {
-    body = { sfx: pendingSfx, useTickets: true };
+    body = { meme: pendingMeme, useTickets: true };
   } else {
     const pin = payPin.value.trim();
     if (!pin) {
@@ -140,14 +140,19 @@ payConfirm?.addEventListener('click', async () => {
     }
     if (savePinCheck?.checked) localStorage.setItem('sb-pin', pin);
     else                       localStorage.removeItem('sb-pin');
-    body = { sfx: pendingSfx, pin };
+    body = { meme: pendingMeme, pin };
   }
 
   payConfirm.disabled    = true;
   payConfirm.textContent = 'Processing...';
 
   try {
-    const res  = await fetch('/api/play', {
+    // Update body to use 'meme' parameter instead of 'sfx'
+    if (body.sfx) {
+      body.meme = body.sfx;
+      delete body.sfx;
+    }
+    const res  = await fetch('/api/playSound', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body)
@@ -166,7 +171,7 @@ payConfirm?.addEventListener('click', async () => {
         currentTickets = data.tickets;
         if (ticketBalanceEl) ticketBalanceEl.textContent = currentTickets;
       }
-      pendingSfx = null;
+      pendingMeme = null;
       pendingBtn = null;
     } else if (res.status === 429) {
       payError.textContent   = 'Another sound is already playing. Try again later.';
@@ -198,10 +203,10 @@ async function ownerPlay(file, btn) {
   setTimeout(() => btn.classList.remove('playing'), 2000);
 
   try {
-    const res = await fetch('/api/play', {
+    const res = await fetch('/api/playSound', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ sfx: file })
+      body:    JSON.stringify({ meme: file })
     });
     if (res.status === 429) {
       btn.classList.remove('playing');
@@ -239,9 +244,12 @@ function attachAudioLogic(btn) {
 
 // --- Fetch Sounds ---
 function fetchSounds() {
-  return fetch('/api/sounds')
+  return fetch('/api/getSounds')
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-    .then(data => data.sfx || [])
+    .then(data => {
+      console.log('[Client] Received sounds data:', data);
+      return data.memeSFX || [];
+    })
     .catch(err => { console.error('[Sounds] Failed:', err); return []; });
 }
 
@@ -250,6 +258,8 @@ function fetchSounds() {
 function buildSoundGrid(sfxList) {
   const grid = document.querySelector('.sound-grid');
   if (!grid) return;
+
+  console.log('[Grid] Building with sounds:', sfxList);
 
   sfxList
     .filter(filename => filename !== 'disabled')

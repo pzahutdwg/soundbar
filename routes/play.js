@@ -3,7 +3,7 @@ const router     = express.Router();
 const { isAuthenticated }      = require('../utils/middleware');
 const { isOwner }              = require('../utils/owners');
 const { transfer }             = require('../utils/transferManager');
-const { getTickets, deductTickets } = require('../utils/db');
+const { getTickets, deductTickets, addTickets } = require('../utils/db');
 
 const FORMPIX_URL      = process.env.formpixUrl;
 const API_KEY          = process.env.apiKey;
@@ -11,14 +11,18 @@ const POOL_ID          = Number(process.env.poolID);
 const TICKETS_PER_PLAY = 5;
 const FLAT_PRICE       = 25;
 
-// POST /api/play
-router.post('/api/play', isAuthenticated, async (req, res) => {
-    const { sfx, bgm, pin, useTickets } = req.body;
+// POST /api/playSound
+router.post('/api/playSound', isAuthenticated, async (req, res) => {
+    const { formbar, meme, pin, useTickets } = req.body;
     const userId = req.session.userId;
     const owner   = isOwner(userId);
 
-    if (!sfx && !bgm) {
-        return res.status(400).json({ error: 'Must provide sfx or bgm.' });
+    if (!formbar && !meme) {
+        return res.status(400).json({ error: 'You must provide at least one of formbar or meme.' });
+    }
+    
+    if (formbar && meme) {
+        return res.status(400).json({ error: 'You can only play one sound at a time. If both formbar and meme are provided, the request will be rejected.' });
     }
 
     if (!owner) {
@@ -51,7 +55,7 @@ router.post('/api/play', isAuthenticated, async (req, res) => {
                     to:     POOL_ID,
                     amount: FLAT_PRICE,
                     pin:    Number(pin),
-                    reason: `Soundbar — ${sfx || bgm}`
+                    reason: `Soundbar — ${formbar || meme}`
                 });
                 console.log('[Payment] Transfer successful');
             } catch (err) {
@@ -65,8 +69,8 @@ router.post('/api/play', isAuthenticated, async (req, res) => {
 
     // Play the sound on Formpix
     const params = new URLSearchParams();
-    if (sfx) params.append('sfx', sfx);
-    if (bgm) params.append('bgm', bgm);
+    if (formbar) params.append('formbar', formbar);
+    if (meme) params.append('meme', meme);
     const url = `${FORMPIX_URL}/api/playSound?${params.toString()}`;
     console.log('[Formpix] Playing:', url);
 
@@ -76,11 +80,33 @@ router.post('/api/play', isAuthenticated, async (req, res) => {
             headers: { 'API': API_KEY, 'Content-Type': 'application/json' }
         });
         console.log('[Formpix] playSound response:', response.status, response.statusText);
+        
+        // If request failed, refund tickets (only if user paid with tickets)
+        if (response.status !== 200 && !owner && useTickets) {
+            try {
+                await addTickets(userId, TICKETS_PER_PLAY);
+                console.log(`[Payment] Refunded ${TICKETS_PER_PLAY} tickets to ${userId} due to playSound failure (status ${response.status})`);
+            } catch (refundErr) {
+                console.error('[Payment] Ticket refund failed:', refundErr.message);
+            }
+        }
+        
         // Return updated ticket balance so client can refresh display immediately
         const ticketBalance = owner ? null : await getTickets(userId).catch(() => null);
         res.status(response.status).json({ status: response.status, tickets: ticketBalance });
     } catch (err) {
         console.error('[Formpix] playSound error:', err);
+        
+        // If request errored, refund tickets (only if user paid with tickets)
+        if (!owner && useTickets) {
+            try {
+                await addTickets(userId, TICKETS_PER_PLAY);
+                console.log(`[Payment] Refunded ${TICKETS_PER_PLAY} tickets to ${userId} due to network error`);
+            } catch (refundErr) {
+                console.error('[Payment] Ticket refund failed:', refundErr.message);
+            }
+        }
+        
         res.status(500).json({ error: 'Failed to contact Formpix.' });
     }
 });
